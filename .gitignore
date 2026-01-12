@@ -1,0 +1,21 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Training output
+runs/
+hasil_gambar/
+
+# Dataset
+Data/
+dataset_verifier/
+verifier_raw/
+
+# Model weights
+*.pt
+*.pth
+*.onnx
+
+# Env
+.env
