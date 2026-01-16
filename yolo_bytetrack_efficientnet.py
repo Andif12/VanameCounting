@@ -11,7 +11,7 @@ import time
 import sys
 import math
 
-# ================= CONFIG =================
+# CONFIG
 MODEL_PATH = "model/best.pt"
 VIDEO_PATH = "Data/300.MP4"
 TRACKER_PATH = "venv/Lib/site-packages/ultralytics/cfg/trackers/bytetrack.yaml"
@@ -40,9 +40,8 @@ VERIFIER_INTERVAL = 5
 MAX_VERIFY_PER_FRAME = 50
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# =========================================
 
-# ================= LOAD MODELS =================
+# LOAD MODELS
 detector = YOLO(MODEL_PATH)
 
 verifier = efficientnet_b0(weights=None)
@@ -60,7 +59,7 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# ================= VIDEO =================
+# VIDEO
 cap = cv2.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
     raise RuntimeError("Gagal membuka video")
@@ -68,7 +67,7 @@ if not cap.isOpened():
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-# ================= STORAGE =================
+# STORAGE
 counts_per_frame = []
 frame_freq = defaultdict(int)
 
@@ -80,7 +79,7 @@ frame_idx = 0
 start_time = time.time()
 force_stop = False
 
-# ================= MAIN LOOP =================
+# MAIN LOOP
 try:
     while True:
         if frame_idx >= MAX_FRAMES:
@@ -101,7 +100,7 @@ try:
 
         final_boxes = []
 
-        # ===== YOLO + BYTETRACK + VERIFIER =====
+        # YOLO + BYTETRACK + VERIFIER
         for i in range(TILE_ROWS):
             for j in range(TILE_COLS):
                 y1 = i * tile_h
@@ -154,7 +153,7 @@ try:
                                 (bx1 + x1, by1 + y1, bx2 + x1, by2 + y1)
                             )
 
-        # ===== DRAW =====
+        # DRAW
         for (x1, y1, x2, y2) in final_boxes:
             cv2.rectangle(
                 overlay,
@@ -173,7 +172,7 @@ try:
         counts_per_frame.append(detected_count)
         frame_freq[detected_count] += 1
 
-        # ===== COUNTING METRICS =====
+        # COUNTING METRICS
         tp = min(detected_count, GROUND_TRUTH)
         fp = max(detected_count - GROUND_TRUTH, 0)
         fn = max(GROUND_TRUTH - detected_count, 0)
@@ -182,7 +181,7 @@ try:
         fp_total += fp
         fn_total += fn
 
-        # ===== DISPLAY =====
+        # DISPLAY
         scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
         resized = cv2.resize(annotated, (int(w * scale), int(h * scale)))
 
@@ -208,7 +207,7 @@ finally:
 
 end_time = time.time()
 
-# ================= ANALISIS =================
+# ANALISIS
 if len(counts_per_frame) == 0:
     print("Tidak ada frame yang berhasil diproses.")
     sys.exit()
@@ -235,29 +234,29 @@ total_time = end_time - start_time
 fps = len(counts_per_frame) / total_time
 time_per_frame = total_time / len(counts_per_frame)
 
-# ================= OUTPUT =================
-print("\n===== ESTIMASI JUMLAH BENUR =====")
+# OUTPUT
+print("\nESTIMASI JUMLAH BENUR")
 print(f"Modus                        : {mode_benur}")
 print(f"Median                       : {median_benur}")
 
-print("\n===== JUMLAH OBJEK DIANGGAP BENAR =====")
+print("\nJUMLAH OBJEK DIANGGAP BENAR")
 print(f"Estimasi akhir (median)      : {estimated_true_count}")
 
-print("\n===== METRIK KINERJA (COUNTING-BASED) =====")
+print("\nMETRIK KINERJA (COUNTING-BASED)")
 print(f"Precision                    : {precision:.4f}")
 print(f"Recall                       : {recall:.4f}")
 print(f"F1-Score                     : {f1_score:.4f}")
 
-print("\n===== ERROR METRICS PER FRAME =====")
+print("\nERROR METRICS PER FRAME")
 print(f"MAE                          : {mae:.2f}")
 print(f"RMSE                         : {rmse:.2f}")
 print(f"MAPE                         : {mape:.2f}%")
 
-print("\n===== STATISTIK DISTRIBUSI =====")
+print("\nSTATISTIK DISTRIBUSI")
 print(f"Standard Deviation           : {std_dev:.2f}")
 print(f"Coefficient of Variation     : {cv:.2f}%")
 
-print("\n===== PERFORMA SISTEM =====")
+print("\nPERFORMA SISTEM")
 print(f"FPS                          : {fps:.2f}")
 print(f"Waktu / frame                : {time_per_frame:.4f} detik")
 

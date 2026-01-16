@@ -2,9 +2,7 @@ import cv2
 from pathlib import Path
 import os
 
-# ==============================
 # CONFIG (SUDAH SESUAI DATASET)
-# ==============================
 BASE = Path("Pl10-5")
 SPLIT = "train"          # pakai data train saja
 OUT_DIR = "verifier_raw"
@@ -23,9 +21,7 @@ count = 0
 print(f"✅ Images : {img_dir}")
 print(f"✅ Labels : {label_dir}")
 
-# ==============================
 # EKSTRAK CROP
-# ==============================
 for img_path in img_dir.iterdir():
     if img_path.suffix.lower() not in IMG_EXT:
         continue

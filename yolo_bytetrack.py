@@ -27,7 +27,6 @@ TILE_COLS = 1
 MAX_FRAMES = 300
 BOX_THICKNESS = 1
 BOX_ALPHA = 0.6
-# =========================================
 
 # Load model
 model = YOLO(MODEL_PATH)

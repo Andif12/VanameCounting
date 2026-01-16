@@ -5,9 +5,7 @@ from pathlib import Path
 from tqdm import tqdm
 import numpy as np
 
-# ==============================
 # CONFIG
-# ==============================
 RAW_DIR = Path("verifier_raw")          # hasil crop dari Roboflow
 OUT_DIR = Path("dataset_verifier")      # output dataset verifier
 
@@ -20,9 +18,7 @@ INVALID_SIZE = (32, 32)                 # ukuran rusak
 random.seed(42)
 np.random.seed(42)
 
-# ==============================
 # RESET OUTPUT FOLDER
-# ==============================
 if OUT_DIR.exists():
     shutil.rmtree(OUT_DIR)
 
@@ -30,9 +26,7 @@ for split in ["train", "val"]:
     for cls in ["benur_valid", "benur_invalid"]:
         (OUT_DIR / split / cls).mkdir(parents=True, exist_ok=True)
 
-# ==============================
 # LOAD SUBSET
-# ==============================
 all_images = list(RAW_DIR.glob("*.jpg"))
 if len(all_images) == 0:
     raise RuntimeError("Folder verifier_raw kosong")
@@ -42,9 +36,7 @@ selected = all_images[:TOTAL_SAMPLES]
 
 train_cut = int(TRAIN_RATIO * TOTAL_SAMPLES)
 
-# ==============================
 # MAKE INVALID IMAGE (AMAN)
-# ==============================
 def make_invalid(img):
     if img is None or img.size == 0:
         return None
@@ -75,9 +67,7 @@ def make_invalid(img):
 
     return img
 
-# ==============================
 # BUILD DATASET
-# ==============================
 valid_count = 0
 invalid_count = 0
 
@@ -102,9 +92,7 @@ for i, img_path in enumerate(tqdm(selected, desc="Building verifier dataset")):
             cv2.imwrite(str(invalid_dst), invalid_img)
             invalid_count += 1
 
-# ==============================
 # SUMMARY
-# ==============================
 print("\n===== DATASET VERIFIER SUMMARY =====")
 print(f"Total raw images       : {len(all_images)}")
 print(f"Total selected samples : {TOTAL_SAMPLES}")

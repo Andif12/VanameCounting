@@ -6,7 +6,6 @@ import statistics
 import math
 import time
 
-# ================= CONFIG =================
 MODEL_PATH = "model/best.pt"
 VIDEO_PATH = "Data/300.MP4"
 
@@ -26,7 +25,6 @@ TILE_COLS = 2
 MAX_FRAMES = 300
 BOX_THICKNESS = 1
 BOX_ALPHA = 0.6
-# =========================================
 
 # Load model
 model = YOLO(MODEL_PATH)
@@ -39,7 +37,6 @@ if not cap.isOpened():
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-# ================= STORAGE =================
 frame_count_frequency = defaultdict(int)
 counts_per_frame = []
 
@@ -56,7 +53,6 @@ total_frames = 0
 
 start_time = time.time()
 
-# ================= MAIN LOOP =================
 while True:
     if frame_idx >= MAX_FRAMES:
         break
@@ -77,7 +73,6 @@ while True:
 
     total_boxes = []
 
-    # ===== TILE YOLO INFERENCE =====
     for i in range(TILE_ROWS):
         for j in range(TILE_COLS):
             y1 = i * tile_h
@@ -104,13 +99,12 @@ while True:
                         (bx1 + x1, by1 + y1, bx2 + x1, by2 + y1)
                     )
 
-    # ===== DRAW SMOOTH BOX =====
     for (x1, y1, x2, y2) in total_boxes:
         cv2.rectangle(
             overlay,
             (x1, y1),
             (x2, y2),
-            (0, 255, 0),   # hijau = YOLO
+            (0, 255, 0),  
             BOX_THICKNESS,
             lineType=cv2.LINE_AA
         )
@@ -119,18 +113,15 @@ while True:
         overlay, BOX_ALPHA, annotated, 1 - BOX_ALPHA, 0
     )
 
-    # ===== COUNTING =====
     detected_count = len(total_boxes)
     counts_per_frame.append(detected_count)
     frame_count_frequency[detected_count] += 1
 
-    # ===== ERROR PER FRAME =====
     error = detected_count - GROUND_TRUTH_BENUR
     absolute_errors.append(abs(error))
     squared_errors.append(error ** 2)
     percentage_errors.append(abs(error) / GROUND_TRUTH_BENUR)
 
-    # ===== COUNTING-BASED PRECISION / RECALL =====
     tp = min(detected_count, GROUND_TRUTH_BENUR)
     fp = max(detected_count - GROUND_TRUTH_BENUR, 0)
     fn = max(GROUND_TRUTH_BENUR - detected_count, 0)
@@ -139,7 +130,7 @@ while True:
     fp_total += fp
     fn_total += fn
 
-    # ===== DISPLAY =====
+    #display
     scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
     resized = cv2.resize(annotated, (int(w * scale), int(h * scale)))
 
@@ -165,7 +156,7 @@ cap.release()
 cv2.destroyAllWindows()
 end_time = time.time()
 
-# ================= ANALISIS AKHIR =================
+#ANALISIS AKHIR
 mode_benur = max(frame_count_frequency, key=frame_count_frequency.get)
 median_benur = int(statistics.median(counts_per_frame))
 estimated_true_count = median_benur
@@ -196,7 +187,7 @@ elif cv < 20:
 else:
     karakter = "Fluktuatif"
 
-# ================= OUTPUT =================
+#OUTPUT
 print("\n===== HASIL AKHIR VIDEO =====")
 print(f"Ground truth (manual)        : {GROUND_TRUTH_BENUR}")
 print(f"Total frame diuji            : {total_frames}")

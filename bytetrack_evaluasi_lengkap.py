@@ -4,9 +4,7 @@ import numpy as np
 from collections import Counter
 import os
 
-# =====================
 # CONFIG
-# =====================
 MODEL_PATH = "model/best.pt"
 VIDEO_PATH = "Data/IMG_8986.MOV"
 
@@ -26,9 +24,7 @@ MAX_SAVED_IMAGES = 5
 OUTPUT_DIR = "hasil_gambar/bytetrack_visual"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# =====================
 # LOAD MODEL & VIDEO
-# =====================
 model = YOLO(MODEL_PATH)
 cap = cv2.VideoCapture(VIDEO_PATH)
 
@@ -38,17 +34,13 @@ if not cap.isOpened():
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-# =====================
 # STORAGE
-# =====================
 frame_idx = 0
 snapshot_counts = []
 track_life = Counter()
 saved_images = 0
 
-# =====================
 # MAIN LOOP
-# =====================
 while True:
     ret, frame = cap.read()
     if not ret:
@@ -69,9 +61,9 @@ while True:
     annotated = frame.copy()
     active_ids = set()
 
-    # =====================
+
     # PROSES TRACKING
-    # =====================
+
     if results and results[0].boxes is not None:
         for box in results[0].boxes:
             if box.id is None:
@@ -99,15 +91,15 @@ while True:
                 2
             )
 
-    # =====================
+
     # SNAPSHOT COUNTING
-    # =====================
+
     if frame_idx % SNAPSHOT_INTERVAL == 0:
         snapshot_counts.append(len(active_ids))
 
-        # =====================
+    
         # SIMPAN GAMBAR (FRAME SAMA DENGAN YOLO)
-        # =====================
+    
         if saved_images < MAX_SAVED_IMAGES:
             save_path = os.path.join(
                 OUTPUT_DIR,
@@ -121,9 +113,9 @@ while True:
             else:
                 print(f"[WARNING] Gagal menyimpan frame {frame_idx}")
 
-    # =====================
+
     # DISPLAY
-    # =====================
+
     scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
     new_w = int(w * scale)
     new_h = int(h * scale)
@@ -155,9 +147,7 @@ while True:
 cap.release()
 cv2.destroyAllWindows()
 
-# =====================
 # ANALISIS AKHIR
-# =====================
 mode_snapshot = Counter(snapshot_counts).most_common(1)[0][0]
 median_snapshot = int(np.median(snapshot_counts))
 min_snapshot = min(snapshot_counts)
