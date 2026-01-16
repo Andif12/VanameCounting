@@ -8,7 +8,7 @@ import csv
 
 # CONFIG
 MODEL_PATH = "model/best.pt"
-VIDEO_PATH = "Data/IMG_8988.MOV"
+VIDEO_PATH = "Data/IMG_0441.MOV"
 
 WINDOW_NAME = "YOLO Detection (Benur)"
 WINDOW_SIZE = 900

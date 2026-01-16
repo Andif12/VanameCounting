@@ -1,238 +1,264 @@
-import cv2
-import torch
-import numpy as np
 from ultralytics import YOLO
-from torchvision import models, transforms
-import torch.nn as nn
-from collections import Counter
-import os
+import cv2
+import numpy as np
+from collections import defaultdict
+import statistics
+import torch
+import torchvision.transforms as transforms
+from torchvision.models import efficientnet_b0
+from PIL import Image
+import time
+import sys
+import math
 
-# =====================
-# GUI CHECK (AMAN)
-# =====================
-def is_gui_available():
-    try:
-        cv2.namedWindow("test", cv2.WINDOW_NORMAL)
-        cv2.destroyWindow("test")
-        return True
-    except:
-        return False
-
-USE_GUI = is_gui_available()
-
-# =====================
-# CONFIG
-# =====================
-YOLO_MODEL_PATH = "model/best.pt"
-VERIFIER_MODEL_PATH = "model/efficientnet_lite_verifier.pth"
-VIDEO_PATH = "Data/IMG_8988.MOV"
-
+# ================= CONFIG =================
+MODEL_PATH = "model/best.pt"
+VIDEO_PATH = "Data/300.MP4"
 TRACKER_PATH = "venv/Lib/site-packages/ultralytics/cfg/trackers/bytetrack.yaml"
+VERIFIER_MODEL_PATH = "model/efficientnet_lite_verifier.pth"
+
+WINDOW_NAME = "YOLO + ByteTrack + EfficientNet-Lite Verifier"
+WINDOW_SIZE = 900
+
+GROUND_TRUTH = 75
 
 IMG_SIZE = 960
 CONF_THRESHOLD = 0.3
+IOU_THRESHOLD = 0.6
+MAX_DET = 2000
 
-SNAPSHOT_INTERVAL = 30      # HARUS SAMA DENGAN YOLO & BYTE TRACK
-MIN_TRACK_AGE = 8
-VERIFY_EVERY_N_FRAME = 4
-VERIFIER_THRESHOLD = 0.35
+TILE_ROWS = 2
+TILE_COLS = 1
+MAX_FRAMES = 300
 
-WINDOW_NAME = "YOLO + ByteTrack + EfficientNet"
-WINDOW_SIZE = 900
+# visual smoothing
+BOX_THICKNESS = 1
+BOX_ALPHA = 0.6
+
+# verifier sampling
+VERIFIER_INTERVAL = 5
+MAX_VERIFY_PER_FRAME = 50
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+# =========================================
 
-# =====================
-# SIMPAN GAMBAR
-# =====================
-MAX_SAVED_IMAGES = 5
-OUTPUT_DIR = "hasil_gambar/multimodel"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-saved_images = 0
+# ================= LOAD MODELS =================
+detector = YOLO(MODEL_PATH)
 
-# =====================
-# LOAD MODEL
-# =====================
-yolo = YOLO(YOLO_MODEL_PATH)
-
-verifier = models.efficientnet_b0(weights=None)
-verifier.classifier[1] = nn.Linear(
+verifier = efficientnet_b0(weights=None)
+verifier.classifier[1] = torch.nn.Linear(
     verifier.classifier[1].in_features, 2
 )
-verifier.load_state_dict(
-    torch.load(VERIFIER_MODEL_PATH, map_location=DEVICE)
-)
-verifier.eval().to(DEVICE)
 
-verifier_tf = transforms.Compose([
-    transforms.ToPILImage(),
+state_dict = torch.load(VERIFIER_MODEL_PATH, map_location=DEVICE)
+verifier.load_state_dict(state_dict)
+verifier.to(DEVICE)
+verifier.eval()
+
+transform = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
+    transforms.ToTensor()
 ])
 
-# =====================
-# VIDEO
-# =====================
+# ================= VIDEO =================
 cap = cv2.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
     raise RuntimeError("Gagal membuka video")
 
-if USE_GUI:
-    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
-else:
-    print("⚠️ GUI OpenCV tidak tersedia, berjalan headless")
+cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-# =====================
-# STORAGE
-# =====================
-track_age = Counter()
-snapshot_counts = []
+# ================= STORAGE =================
+counts_per_frame = []
+frame_freq = defaultdict(int)
+
+tp_total = 0
+fp_total = 0
+fn_total = 0
+
 frame_idx = 0
+start_time = time.time()
+force_stop = False
 
-print("▶ Memproses video (YOLO + ByteTrack + EfficientNet-Lite)...")
+# ================= MAIN LOOP =================
+try:
+    while True:
+        if frame_idx >= MAX_FRAMES:
+            break
 
-# =====================
-# MAIN LOOP
-# =====================
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    frame_idx += 1
-    h, w = frame.shape[:2]
+        frame_idx += 1
 
-    results = yolo.track(
-        frame,
-        conf=CONF_THRESHOLD,
-        imgsz=IMG_SIZE,
-        tracker=TRACKER_PATH,
-        persist=True,
-        verbose=False
-    )
+        annotated = frame.copy()
+        overlay = annotated.copy()
 
-    active_ids = set()
-    annotated = frame.copy()
+        h, w = frame.shape[:2]
+        tile_h = h // TILE_ROWS
+        tile_w = w // TILE_COLS
 
-    if results and results[0].boxes is not None:
-        for box in results[0].boxes:
-            if box.id is None:
-                continue
+        final_boxes = []
 
-            tid = int(box.id[0])
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
+        # ===== YOLO + BYTETRACK + VERIFIER =====
+        for i in range(TILE_ROWS):
+            for j in range(TILE_COLS):
+                y1 = i * tile_h
+                y2 = (i + 1) * tile_h
+                x1 = j * tile_w
+                x2 = (j + 1) * tile_w
 
-            track_age[tid] += 1
-            if track_age[tid] < MIN_TRACK_AGE:
-                continue
+                tile = frame[y1:y2, x1:x2]
 
-            # =====================
-            # VERIFIER (PERIODIK)
-            # =====================
-            if frame_idx % VERIFY_EVERY_N_FRAME == 0:
-                crop = frame[y1:y2, x1:x2]
-                if crop.size == 0:
-                    continue
+                results = detector.track(
+                    tile,
+                    conf=CONF_THRESHOLD,
+                    imgsz=IMG_SIZE,
+                    iou=IOU_THRESHOLD,
+                    max_det=MAX_DET,
+                    agnostic_nms=True,
+                    tracker=TRACKER_PATH,
+                    persist=False,
+                    verbose=False
+                )
 
-                img_t = verifier_tf(crop).unsqueeze(0).to(DEVICE)
-                with torch.no_grad():
-                    out = verifier(img_t)
-                    prob_valid = torch.softmax(out, dim=1)[0][1].item()
+                if results and results[0].boxes is not None:
+                    verify_count = 0
 
-                if prob_valid < VERIFIER_THRESHOLD:
-                    continue
+                    for box in results[0].boxes.xyxy:
+                        bx1, by1, bx2, by2 = map(int, box)
+                        is_valid = True
 
-            active_ids.add(tid)
+                        if (
+                            frame_idx % VERIFIER_INTERVAL == 0
+                            and verify_count < MAX_VERIFY_PER_FRAME
+                        ):
+                            crop = tile[by1:by2, bx1:bx2]
+                            if crop.size != 0:
+                                crop_pil = Image.fromarray(
+                                    cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                                )
+                                input_tensor = transform(crop_pil).unsqueeze(0).to(DEVICE)
 
-            # DRAW
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                annotated,
-                f"ID {tid}",
-                (x1, max(y1 - 10, 20)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
+                                with torch.no_grad():
+                                    pred = torch.argmax(
+                                        verifier(input_tensor), dim=1
+                                    ).item()
+
+                                is_valid = (pred == 1)
+                                verify_count += 1
+
+                        if is_valid:
+                            final_boxes.append(
+                                (bx1 + x1, by1 + y1, bx2 + x1, by2 + y1)
+                            )
+
+        # ===== DRAW =====
+        for (x1, y1, x2, y2) in final_boxes:
+            cv2.rectangle(
+                overlay,
+                (x1, y1),
+                (x2, y2),
+                (0, 165, 255),
+                BOX_THICKNESS,
+                lineType=cv2.LINE_AA
             )
 
-    # =====================
-    # SNAPSHOT & SIMPAN GAMBAR
-    # =====================
-    if frame_idx % SNAPSHOT_INTERVAL == 0:
-        snapshot_counts.append(len(active_ids))
+        annotated = cv2.addWeighted(
+            overlay, BOX_ALPHA, annotated, 1 - BOX_ALPHA, 0
+        )
 
-        if saved_images < MAX_SAVED_IMAGES:
-            save_path = os.path.join(
-                OUTPUT_DIR,
-                f"multimodel_snapshot_{frame_idx}.jpg"
-            )
-            if cv2.imwrite(save_path, annotated):
-                saved_images += 1
-                print(f"[INFO] Snapshot {frame_idx} disimpan → {save_path}")
+        detected_count = len(final_boxes)
+        counts_per_frame.append(detected_count)
+        frame_freq[detected_count] += 1
 
-    # =====================
-    # GUI DISPLAY
-    # =====================
-    if USE_GUI:
+        # ===== COUNTING METRICS =====
+        tp = min(detected_count, GROUND_TRUTH)
+        fp = max(detected_count - GROUND_TRUTH, 0)
+        fn = max(GROUND_TRUTH - detected_count, 0)
+
+        tp_total += tp
+        fp_total += fp
+        fn_total += fn
+
+        # ===== DISPLAY =====
         scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
-        new_w, new_h = int(w * scale), int(h * scale)
-        resized = cv2.resize(annotated, (new_w, new_h))
+        resized = cv2.resize(annotated, (int(w * scale), int(h * scale)))
 
         canvas = np.zeros((WINDOW_SIZE, WINDOW_SIZE, 3), dtype=np.uint8)
-        x_off = (WINDOW_SIZE - new_w) // 2
-        y_off = (WINDOW_SIZE - new_h) // 2
-        canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+        y_off = (WINDOW_SIZE - resized.shape[0]) // 2
+        x_off = (WINDOW_SIZE - resized.shape[1]) // 2
+        canvas[y_off:y_off + resized.shape[0], x_off:x_off + resized.shape[1]] = resized
 
-        cv2.putText(
-            canvas,
-            f"Benur aktif (terverifikasi): {len(active_ids)}",
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 0),
-            2
-        )
+        cv2.putText(canvas, f"Benur terdeteksi: {detected_count}",
+                    (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+        cv2.putText(canvas, f"Frame: {frame_idx}/{MAX_FRAMES}",
+                    (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 2)
 
         cv2.imshow(WINDOW_NAME, canvas)
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-        if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+        key = cv2.waitKey(1)
+        if key == 27 or cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
             break
 
-    if frame_idx % 120 == 0:
-        print(f"  Frame {frame_idx} diproses...")
-
-cap.release()
-if USE_GUI:
+finally:
+    cap.release()
     cv2.destroyAllWindows()
 
-# =====================
-# FINAL ESTIMATION
-# =====================
-counter = Counter(snapshot_counts)
-mode_est = counter.most_common(1)[0][0]
-median_est = int(np.median(snapshot_counts))
+end_time = time.time()
 
-print("\n===== HASIL ESTIMASI JUMLAH BENUR =====")
-print(f"Total frame diproses            : {frame_idx}")
-print(f"Total snapshot dianalisis       : {len(snapshot_counts)}")
-print(f"Rentang hasil snapshot          : {min(snapshot_counts)} – {max(snapshot_counts)} benur")
-print(f"Nilai modus (paling sering)     : {mode_est} benur")
-print(f"Nilai median (tengah distribusi): {median_est} benur")
+# ================= ANALISIS =================
+if len(counts_per_frame) == 0:
+    print("Tidak ada frame yang berhasil diproses.")
+    sys.exit()
 
-print("\n===== KESIMPULAN =====")
-print(
-    f"Dengan integrasi YOLO, ByteTrack, dan EfficientNet-Lite "
-    f"melalui skema verifikasi periodik, "
-    f"jumlah benur dalam video diestimasi berada pada kisaran "
-    f"{mode_est}–{median_est} ekor."
-)
+mode_benur = max(frame_freq, key=frame_freq.get)
+median_benur = int(statistics.median(counts_per_frame))
+estimated_true_count = median_benur
+
+precision = tp_total / (tp_total + fp_total) if (tp_total + fp_total) > 0 else 0
+recall = tp_total / (tp_total + fn_total) if (tp_total + fn_total) > 0 else 0
+f1_score = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0
+
+errors = [c - GROUND_TRUTH for c in counts_per_frame]
+abs_errors = [abs(e) for e in errors]
+
+mae = np.mean(abs_errors)
+rmse = math.sqrt(np.mean([e**2 for e in errors]))
+mape = np.mean([abs(e) / GROUND_TRUTH for e in errors]) * 100
+
+std_dev = np.std(counts_per_frame)
+cv = (std_dev / estimated_true_count) * 100 if estimated_true_count > 0 else 0
+
+total_time = end_time - start_time
+fps = len(counts_per_frame) / total_time
+time_per_frame = total_time / len(counts_per_frame)
+
+# ================= OUTPUT =================
+print("\n===== ESTIMASI JUMLAH BENUR =====")
+print(f"Modus                        : {mode_benur}")
+print(f"Median                       : {median_benur}")
+
+print("\n===== JUMLAH OBJEK DIANGGAP BENAR =====")
+print(f"Estimasi akhir (median)      : {estimated_true_count}")
+
+print("\n===== METRIK KINERJA (COUNTING-BASED) =====")
+print(f"Precision                    : {precision:.4f}")
+print(f"Recall                       : {recall:.4f}")
+print(f"F1-Score                     : {f1_score:.4f}")
+
+print("\n===== ERROR METRICS PER FRAME =====")
+print(f"MAE                          : {mae:.2f}")
+print(f"RMSE                         : {rmse:.2f}")
+print(f"MAPE                         : {mape:.2f}%")
+
+print("\n===== STATISTIK DISTRIBUSI =====")
+print(f"Standard Deviation           : {std_dev:.2f}")
+print(f"Coefficient of Variation     : {cv:.2f}%")
+
+print("\n===== PERFORMA SISTEM =====")
+print(f"FPS                          : {fps:.2f}")
+print(f"Waktu / frame                : {time_per_frame:.4f} detik")
 
 print("\nProgram selesai dengan aman.")

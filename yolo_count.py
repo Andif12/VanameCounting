@@ -3,21 +3,35 @@ import cv2
 import numpy as np
 from collections import defaultdict
 import statistics
+import math
+import time
 
-# CONFIG
+# ================= CONFIG =================
 MODEL_PATH = "model/best.pt"
-VIDEO_PATH = "Data/IMG_8986.MOV"
+VIDEO_PATH = "Data/300.MP4"
 
-WINDOW_NAME = "YOLO Detection"
+GROUND_TRUTH_BENUR = 75   # jumlah manual sebenarnya
 
+WINDOW_NAME = "YOLO Detection (Tiled)"
 WINDOW_SIZE = 900
-IMG_SIZE = 1280
-CONF_THRESHOLD = 0.4
 
-# LOAD MODEL
+IMG_SIZE = 960
+CONF_THRESHOLD = 0.3
+IOU_THRESHOLD = 0.6
+MAX_DET = 2000
+
+TILE_ROWS = 2
+TILE_COLS = 2
+
+MAX_FRAMES = 300
+BOX_THICKNESS = 1
+BOX_ALPHA = 0.6
+# =========================================
+
+# Load model
 model = YOLO(MODEL_PATH)
 
-# LOAD VIDEO    
+# Open video
 cap = cv2.VideoCapture(VIDEO_PATH)
 if not cap.isOpened():
     raise RuntimeError("Gagal membuka video")
@@ -25,76 +39,120 @@ if not cap.isOpened():
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-# STORAGE DISTRIBUSI
+# ================= STORAGE =================
 frame_count_frequency = defaultdict(int)
 counts_per_frame = []
+
+absolute_errors = []
+squared_errors = []
+percentage_errors = []
+
+tp_total = 0
+fp_total = 0
+fn_total = 0
+
+frame_idx = 0
 total_frames = 0
 
-# MAIN LOOP
+start_time = time.time()
+
+# ================= MAIN LOOP =================
 while True:
+    if frame_idx >= MAX_FRAMES:
+        break
+
     ret, frame = cap.read()
     if not ret:
         break
 
-    orig_h, orig_w = frame.shape[:2]
-
-    results = model(
-        frame,
-        conf=CONF_THRESHOLD,
-        imgsz=IMG_SIZE,
-        rect=True
-    )
-
-    annotated = frame.copy()
-
-
-    # HITUNG BENUR FRAME INI
-
-    current_benur_count = len(results[0].boxes)
-    frame_count_frequency[current_benur_count] += 1
-    counts_per_frame.append(current_benur_count)
+    frame_idx += 1
     total_frames += 1
 
-    for box in results[0].boxes:
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
-        cls = int(box.cls[0])
-        conf = float(box.conf[0])
+    annotated = frame.copy()
+    overlay = annotated.copy()
 
-        label = f"{model.names[cls]} {conf:.2f}"
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(
-            annotated,
-            label,
-            (x1, max(y1 - 10, 20)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 0),
-            2
+    h, w = frame.shape[:2]
+    tile_h = h // TILE_ROWS
+    tile_w = w // TILE_COLS
+
+    total_boxes = []
+
+    # ===== TILE YOLO INFERENCE =====
+    for i in range(TILE_ROWS):
+        for j in range(TILE_COLS):
+            y1 = i * tile_h
+            y2 = (i + 1) * tile_h
+            x1 = j * tile_w
+            x2 = (j + 1) * tile_w
+
+            tile = frame[y1:y2, x1:x2]
+
+            results = model(
+                tile,
+                imgsz=IMG_SIZE,
+                conf=CONF_THRESHOLD,
+                iou=IOU_THRESHOLD,
+                max_det=MAX_DET,
+                agnostic_nms=True,
+                verbose=False
+            )
+
+            if results and results[0].boxes is not None:
+                for box in results[0].boxes:
+                    bx1, by1, bx2, by2 = map(int, box.xyxy[0])
+                    total_boxes.append(
+                        (bx1 + x1, by1 + y1, bx2 + x1, by2 + y1)
+                    )
+
+    # ===== DRAW SMOOTH BOX =====
+    for (x1, y1, x2, y2) in total_boxes:
+        cv2.rectangle(
+            overlay,
+            (x1, y1),
+            (x2, y2),
+            (0, 255, 0),   # hijau = YOLO
+            BOX_THICKNESS,
+            lineType=cv2.LINE_AA
         )
 
+    annotated = cv2.addWeighted(
+        overlay, BOX_ALPHA, annotated, 1 - BOX_ALPHA, 0
+    )
 
-    # DISPLAY (1:1 LETTERBOX)
+    # ===== COUNTING =====
+    detected_count = len(total_boxes)
+    counts_per_frame.append(detected_count)
+    frame_count_frequency[detected_count] += 1
 
-    scale = min(WINDOW_SIZE / orig_w, WINDOW_SIZE / orig_h)
-    new_w = int(orig_w * scale)
-    new_h = int(orig_h * scale)
+    # ===== ERROR PER FRAME =====
+    error = detected_count - GROUND_TRUTH_BENUR
+    absolute_errors.append(abs(error))
+    squared_errors.append(error ** 2)
+    percentage_errors.append(abs(error) / GROUND_TRUTH_BENUR)
 
-    resized = cv2.resize(annotated, (new_w, new_h))
+    # ===== COUNTING-BASED PRECISION / RECALL =====
+    tp = min(detected_count, GROUND_TRUTH_BENUR)
+    fp = max(detected_count - GROUND_TRUTH_BENUR, 0)
+    fn = max(GROUND_TRUTH_BENUR - detected_count, 0)
+
+    tp_total += tp
+    fp_total += fp
+    fn_total += fn
+
+    # ===== DISPLAY =====
+    scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
+    resized = cv2.resize(annotated, (int(w * scale), int(h * scale)))
 
     canvas = np.zeros((WINDOW_SIZE, WINDOW_SIZE, 3), dtype=np.uint8)
-    x_offset = (WINDOW_SIZE - new_w) // 2
-    y_offset = (WINDOW_SIZE - new_h) // 2
-    canvas[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized
+    y_off = (WINDOW_SIZE - resized.shape[0]) // 2
+    x_off = (WINDOW_SIZE - resized.shape[1]) // 2
+    canvas[y_off:y_off + resized.shape[0], x_off:x_off + resized.shape[1]] = resized
 
-    cv2.putText(
-        canvas,
-        f"Benur (frame ini): {current_benur_count}",
-        (20, 40),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (255, 255, 0),
-        2
-    )
+    cv2.putText(canvas, f"Benur (frame ini): {detected_count}",
+                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,0), 2)
+
+    cv2.putText(canvas, f"Frame: {frame_idx}/{MAX_FRAMES}",
+                (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200,200,200), 2)
 
     cv2.imshow(WINDOW_NAME, canvas)
 
@@ -105,31 +163,70 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+end_time = time.time()
 
-# ANALISIS TANPA GROUND TRUTH
+# ================= ANALISIS AKHIR =================
 mode_benur = max(frame_count_frequency, key=frame_count_frequency.get)
-mode_freq = frame_count_frequency[mode_benur]
+median_benur = int(statistics.median(counts_per_frame))
+estimated_true_count = median_benur
 
-median_benur = statistics.median(counts_per_frame)
+precision = tp_total / (tp_total + fp_total) if (tp_total + fp_total) > 0 else 0
+recall    = tp_total / (tp_total + fn_total) if (tp_total + fn_total) > 0 else 0
+f1_score  = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0
 
-# OUTPUT AKHIR VIDEO
+mae  = sum(absolute_errors) / total_frames
+rmse = math.sqrt(sum(squared_errors) / total_frames)
+mape = (sum(percentage_errors) / total_frames) * 100
+
+std_dev = np.std(counts_per_frame)
+cv = (std_dev / estimated_true_count) * 100 if estimated_true_count > 0 else 0
+
+abs_error = abs(estimated_true_count - GROUND_TRUTH_BENUR)
+percentage_error = (abs_error / GROUND_TRUTH_BENUR) * 100
+
+total_time = end_time - start_time
+fps = total_frames / total_time
+time_per_frame = total_time / total_frames
+
+# karakter hasil
+if cv < 10:
+    karakter = "Sangat stabil"
+elif cv < 20:
+    karakter = "Stabil"
+else:
+    karakter = "Fluktuatif"
+
+# ================= OUTPUT =================
 print("\n===== HASIL AKHIR VIDEO =====")
-print(f"Total frame diproses              : {total_frames}")
-
-print("\nDistribusi jumlah benur / frame :")
-for k in sorted(frame_count_frequency):
-    print(f"  {k} benur → {frame_count_frequency[k]} frame")
+print(f"Ground truth (manual)        : {GROUND_TRUTH_BENUR}")
+print(f"Total frame diuji            : {total_frames}")
 
 print("\n===== ESTIMASI JUMLAH BENUR =====")
-print(f"Modus (paling sering muncul)      : {mode_benur} benur")
-print(f"Muncul pada                       : {mode_freq} frame")
-print(f"Median (nilai tengah)             : {median_benur} benur")
+print(f"Modus                        : {mode_benur}")
+print(f"Median                       : {median_benur}")
 
-print("\n===== KESIMPULAN =====")
-print(
-    f"Jumlah benur dalam video diestimasi sebanyak "
-    f"{mode_benur} ekor berdasarkan nilai modus "
-    f"yang paling stabil terhadap fluktuasi deteksi."
-)
+print("\n===== JUMLAH OBJEK DIANGGAP BENAR =====")
+print(f"Estimasi akhir (median)      : {estimated_true_count}")
+
+print("\n===== METRIK KINERJA (COUNTING-BASED) =====")
+print(f"Precision                    : {precision:.4f}")
+print(f"Recall                       : {recall:.4f}")
+print(f"F1-Score                     : {f1_score:.4f}")
+
+print("\n===== ERROR TERHADAP GROUND TRUTH =====")
+print(f"Selisih absolut              : {abs_error}")
+print(f"Error persentase             : {percentage_error:.2f}%")
+
+print("\n===== ERROR METRICS PER FRAME =====")
+print(f"MAE                          : {mae:.2f}")
+print(f"RMSE                         : {rmse:.2f}")
+print(f"MAPE                         : {mape:.2f}%")
+
+print("\n===== STATISTIK & PERFORMA =====")
+print(f"Standard Deviation           : {std_dev:.2f}")
+print(f"Coefficient of Variation     : {cv:.2f}%")
+print(f"FPS                          : {fps:.2f}")
+print(f"Waktu / frame                : {time_per_frame:.4f} detik")
+print(f"Karakter hasil               : {karakter}")
 
 print("\nProgram selesai dengan aman.")
