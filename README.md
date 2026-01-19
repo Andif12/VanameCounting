@@ -1,5 +1,5 @@
 # VenameCounting
-**Sistem Deteksi dan Penghitungan Benur Udang Vaname Berbasis Multi-Model Terintegrasi**
+**DETEKSI DAN PENGHITUNGAN BENUR UDANG VANAME MENGGUNAKAN PENDEKATAN TERINTEGRASI MULTI-MODEL**
 
 ## 📌 Deskripsi
 **VenameCounting** merupakan *source code* sistem **deteksi dan penghitungan benur udang vaname (*Litopenaeus vannamei*)** yang dikembangkan sebagai bagian dari **penelitian skripsi**.  
