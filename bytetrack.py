@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
-from collections import defaultdict
+from collections import Counter, defaultdict
 import statistics
 import math
 import time
@@ -9,13 +9,13 @@ import os
 
 # ================= CONFIG =================
 MODEL_PATH = "model/best.pt"
-VIDEO_PATH = "Data/625.MOV"
+VIDEO_PATH = "Data/50.MP4"
+TRACKER_PATH = "venv/Lib/site-packages/ultralytics/cfg/trackers/bytetrack.yaml"
 
-GROUND_TRUTH_BENUR = 625
-TARGET_COUNT = 633   # jumlah benur yang ingin disimpan gambarnya
-
-WINDOW_NAME = "YOLO Detection (Tiled)"
+WINDOW_NAME = "YOLO + ByteTrack (Tiled 2x1)"
 WINDOW_SIZE = 900
+
+GROUND_TRUTH = 50
 
 IMG_SIZE = 960
 CONF_THRESHOLD = 0.3
@@ -23,18 +23,19 @@ IOU_THRESHOLD = 0.6
 MAX_DET = 2000
 
 TILE_ROWS = 2
-TILE_COLS = 2
+TILE_COLS = 1
 
 MAX_FRAMES = 300
 BOX_THICKNESS = 1
 BOX_ALPHA = 0.6
 
 # ===== SIMPAN GAMBAR =====
-SAVE_DIR = "hasil_deteksi/yolo/Objek 625"
+SAVE_DIR = "hasil_deteksi/bytetrack/Objek 50"
 SAVE_FRAME_INDEX = 300
+TARGET_COUNT = 54   # simpan saat deteksi ini muncul
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-saved_target = False  # agar deteksi hanya disimpan sekali
+saved_target = False
 
 # ================= LOAD MODEL =================
 model = YOLO(MODEL_PATH)
@@ -46,20 +47,22 @@ if not cap.isOpened():
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-frame_count_frequency = defaultdict(int)
+# ================= STORAGE =================
 counts_per_frame = []
+frame_freq = defaultdict(int)
 
 absolute_errors = []
 squared_errors = []
 percentage_errors = []
 
-tp_total = fp_total = fn_total = 0
-frame_idx = 0
-total_frames = 0
+tp_total = 0
+fp_total = 0
+fn_total = 0
 
+frame_idx = 0
 start_time = time.time()
 
-# ================= PROCESS VIDEO =================
+# ================= MAIN LOOP =================
 while True:
     if frame_idx >= MAX_FRAMES:
         break
@@ -69,7 +72,6 @@ while True:
         break
 
     frame_idx += 1
-    total_frames += 1
 
     annotated = frame.copy()
     overlay = annotated.copy()
@@ -78,73 +80,85 @@ while True:
     tile_h = h // TILE_ROWS
     tile_w = w // TILE_COLS
 
-    total_boxes = []
+    all_boxes = []
 
-    # ===== TILE INFERENCE =====
+    # ==== TILE + BYTETRACK ====
     for i in range(TILE_ROWS):
         for j in range(TILE_COLS):
-            y1, y2 = i * tile_h, (i + 1) * tile_h
-            x1, x2 = j * tile_w, (j + 1) * tile_w
+            y1 = i * tile_h
+            y2 = (i + 1) * tile_h
+            x1 = j * tile_w
+            x2 = (j + 1) * tile_w
 
             tile = frame[y1:y2, x1:x2]
 
-            results = model(
+            results = model.track(
                 tile,
-                imgsz=IMG_SIZE,
                 conf=CONF_THRESHOLD,
+                imgsz=IMG_SIZE,
                 iou=IOU_THRESHOLD,
                 max_det=MAX_DET,
                 agnostic_nms=True,
+                tracker=TRACKER_PATH,
+                persist=False,
                 verbose=False
             )
 
             if results and results[0].boxes is not None:
-                for box in results[0].boxes:
-                    bx1, by1, bx2, by2 = map(int, box.xyxy[0])
-                    total_boxes.append(
+                for box in results[0].boxes.xyxy:
+                    bx1, by1, bx2, by2 = map(int, box)
+                    all_boxes.append(
                         (bx1 + x1, by1 + y1, bx2 + x1, by2 + y1)
                     )
 
-    # ===== DRAW BOX =====
-    for (x1, y1, x2, y2) in total_boxes:
+    # ==== DRAW BOX ====
+    for (x1, y1, x2, y2) in all_boxes:
         cv2.rectangle(
-            overlay, (x1, y1), (x2, y2),
-            (0, 255, 0), BOX_THICKNESS, cv2.LINE_AA
+            overlay,
+            (x1, y1),
+            (x2, y2),
+            (0, 165, 255),
+            BOX_THICKNESS,
+            lineType=cv2.LINE_AA
         )
 
     annotated = cv2.addWeighted(
         overlay, BOX_ALPHA, annotated, 1 - BOX_ALPHA, 0
     )
 
-    detected_count = len(total_boxes)
+    detected_count = len(all_boxes)
 
-    # ===== METRIK =====
-    counts_per_frame.append(detected_count)
-    frame_count_frequency[detected_count] += 1
-
-    error = detected_count - GROUND_TRUTH_BENUR
-    absolute_errors.append(abs(error))
-    squared_errors.append(error ** 2)
-    percentage_errors.append(abs(error) / GROUND_TRUTH_BENUR)
-
-    tp_total += min(detected_count, GROUND_TRUTH_BENUR)
-    fp_total += max(detected_count - GROUND_TRUTH_BENUR, 0)
-    fn_total += max(GROUND_TRUTH_BENUR - detected_count, 0)
-
-    # ===== SIMPAN FRAME KE-350 =====
+    # ==== SIMPAN FRAME KE-300 ====
     if frame_idx == SAVE_FRAME_INDEX:
         path = f"{SAVE_DIR}/frame_{frame_idx}_pred_{detected_count}.jpg"
         cv2.imwrite(path, annotated)
         print(f"[SAVED] {path}")
 
-    # ===== SIMPAN SAAT DETEKSI TARGET =====
+    # ==== SIMPAN SAAT DETEKSI TARGET (637) ====
     if detected_count == TARGET_COUNT and not saved_target:
         path = f"{SAVE_DIR}/deteksi_{TARGET_COUNT}_frame_{frame_idx}.jpg"
         cv2.imwrite(path, annotated)
         print(f"[SAVED TARGET] {path}")
         saved_target = True
 
-    # ===== DISPLAY =====
+    # ==== COUNTING ====
+    counts_per_frame.append(detected_count)
+    frame_freq[detected_count] += 1
+
+    error = detected_count - GROUND_TRUTH
+    absolute_errors.append(abs(error))
+    squared_errors.append(error ** 2)
+    percentage_errors.append(abs(error) / GROUND_TRUTH)
+
+    tp = min(detected_count, GROUND_TRUTH)
+    fp = max(detected_count - GROUND_TRUTH, 0)
+    fn = max(GROUND_TRUTH - detected_count, 0)
+
+    tp_total += tp
+    fp_total += fp
+    fn_total += fn
+
+    # ==== DISPLAY ====
     scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
     resized = cv2.resize(annotated, (int(w * scale), int(h * scale)))
 
@@ -153,7 +167,7 @@ while True:
     x_off = (WINDOW_SIZE - resized.shape[1]) // 2
     canvas[y_off:y_off + resized.shape[0], x_off:x_off + resized.shape[1]] = resized
 
-    cv2.putText(canvas, f"Benur: {detected_count}",
+    cv2.putText(canvas, f"Benur (frame ini): {detected_count}",
                 (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1,
                 (255, 255, 0), 2)
 
@@ -173,26 +187,32 @@ cap.release()
 cv2.destroyAllWindows()
 end_time = time.time()
 
-mode_benur = max(frame_count_frequency, key=frame_count_frequency.get)
-median_benur = int(statistics.median(counts_per_frame))
+mode_count = max(frame_freq, key=frame_freq.get)
+median_count = int(statistics.median(counts_per_frame))
+estimated_true_count = median_count
 
 precision = tp_total / (tp_total + fp_total) if (tp_total + fp_total) else 0
 recall = tp_total / (tp_total + fn_total) if (tp_total + fn_total) else 0
 f1_score = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0
 
-mae = sum(absolute_errors) / total_frames
-rmse = math.sqrt(sum(squared_errors) / total_frames)
-mape = (sum(percentage_errors) / total_frames) * 350
+mae = sum(absolute_errors) / len(absolute_errors)
+rmse = math.sqrt(sum(squared_errors) / len(squared_errors))
+mape = (sum(percentage_errors) / len(percentage_errors)) * 100
 
-fps = total_frames / (end_time - start_time)
+std_dev = np.std(counts_per_frame)
+cv = (std_dev / estimated_true_count) * 100 if estimated_true_count > 0 else 0
 
-print("\n===== HASIL AKHIR =====")
-print(f"Ground Truth   : {GROUND_TRUTH_BENUR}")
-print(f"Median        : {median_benur}")
-print(f"Precision     : {precision:.4f}")
-print(f"Recall        : {recall:.4f}")
-print(f"F1-Score      : {f1_score:.4f}")
-print(f"MAE           : {mae:.2f}")
-print(f"RMSE          : {rmse:.2f}")
-print(f"MAPE          : {mape:.2f}%")
-print(f"FPS           : {fps:.2f}")
+fps = len(counts_per_frame) / (end_time - start_time)
+
+print("\n===== ESTIMASI JUMLAH BENUR =====")
+print(f"Modus                        : {mode_count}")
+print(f"Median                       : {median_count}")
+
+print("\n===== METRIK KINERJA =====")
+print(f"Precision                    : {precision:.4f}")
+print(f"Recall                       : {recall:.4f}")
+print(f"F1-Score                     : {f1_score:.4f}")
+print(f"MAE                          : {mae:.2f}")
+print(f"RMSE                         : {rmse:.2f}")
+print(f"MAPE                         : {mape:.2f}%")
+print(f"FPS                          : {fps:.2f}")
