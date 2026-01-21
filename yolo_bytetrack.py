@@ -6,7 +6,6 @@ import statistics
 import math
 import time
 
-# ================= CONFIG =================
 MODEL_PATH = "model/best.pt"
 VIDEO_PATH = "Data/300.mp4"
 TRACKER_PATH = "venv/Lib/site-packages/ultralytics/cfg/trackers/bytetrack.yaml"
@@ -39,7 +38,6 @@ if not cap.isOpened():
 cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
 cv2.resizeWindow(WINDOW_NAME, WINDOW_SIZE, WINDOW_SIZE)
 
-# ================= STORAGE =================
 counts_per_frame = []
 frame_freq = defaultdict(int)
 
@@ -55,7 +53,6 @@ frame_idx = 0
 
 start_time = time.time()
 
-# ================= MAIN LOOP =================
 while True:
     if frame_idx >= MAX_FRAMES:
         break
@@ -104,7 +101,6 @@ while True:
                         (bx1 + x1, by1 + y1, bx2 + x1, by2 + y1)
                     )
 
-    # ==== DRAW SMOOTH BOX ====
     for (x1, y1, x2, y2) in all_boxes:
         cv2.rectangle(
             overlay,
@@ -123,18 +119,15 @@ while True:
         0
     )
 
-    # ==== COUNTING ====
     detected_count = len(all_boxes)
     counts_per_frame.append(detected_count)
     frame_freq[detected_count] += 1
 
-    # ==== ERROR PER FRAME ====
     error = detected_count - GROUND_TRUTH
     absolute_errors.append(abs(error))
     squared_errors.append(error ** 2)
     percentage_errors.append(abs(error) / GROUND_TRUTH)
 
-    # ==== COUNTING-BASED PRECISION / RECALL ====
     tp = min(detected_count, GROUND_TRUTH)
     fp = max(detected_count - GROUND_TRUTH, 0)
     fn = max(GROUND_TRUTH - detected_count, 0)
@@ -143,7 +136,6 @@ while True:
     fp_total += fp
     fn_total += fn
 
-    # ==== DISPLAY ====
     scale = min(WINDOW_SIZE / w, WINDOW_SIZE / h)
     resized = cv2.resize(annotated, (int(w * scale), int(h * scale)))
 
@@ -183,7 +175,6 @@ cap.release()
 cv2.destroyAllWindows()
 end_time = time.time()
 
-# ================= ANALISIS AKHIR =================
 mode_count = max(frame_freq, key=frame_freq.get)
 median_count = int(statistics.median(counts_per_frame))
 estimated_true_count = median_count
@@ -233,5 +224,3 @@ print(f"Standard Deviation           : {std_dev:.2f}")
 print(f"Coefficient of Variation     : {cv:.2f}%")
 print(f"FPS                          : {fps:.2f}")
 print(f"Waktu / frame                : {time_per_frame:.4f} detik")
-
-print("\nProgram selesai dengan aman.")

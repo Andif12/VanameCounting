@@ -259,5 +259,3 @@ print(f"Coefficient of Variation     : {cv:.2f}%")
 print("\nPERFORMA SISTEM")
 print(f"FPS                          : {fps:.2f}")
 print(f"Waktu / frame                : {time_per_frame:.4f} detik")
-
-print("\nProgram selesai dengan aman.")
